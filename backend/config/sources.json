@@ -1,0 +1,30 @@
+{
+  "sources": [],
+  "_notice": "【提供网站地址】经搜索未找到公开可爬取的读者杂志网站，请用户提供目标期刊网站地址",
+  "_user_action_required": {
+    "step1": "提供目标期刊网站的完整URL",
+    "step2": "分析网站结构，确定文章列表页和详情页的URL模式",
+    "step3": "使用浏览器开发者工具确定CSS选择器",
+    "step4": "按下方格式配置数据源"
+  },
+  "_config_format": {
+    "name": "数据源名称",
+    "base_url": "网站根地址，如 https://example.com",
+    "list_pattern": "列表页URL模式，支持 {year}, {month}, {issue} 变量",
+    "article_selector": "文章链接的CSS选择器",
+    "title_selector": "标题的CSS选择器",
+    "content_selector": "正文的CSS选择器",
+    "author_selector": "作者的CSS选择器（可选）",
+    "category_selector": "分类的CSS选择器（可选）"
+  },
+  "_example_config": {
+    "name": "示例期刊",
+    "base_url": "https://your-provided-site.com",
+    "list_pattern": "/archive/{year}/{month}",
+    "article_selector": ".article-list a",
+    "title_selector": "h1.title",
+    "content_selector": ".article-body",
+    "author_selector": ".author",
+    "category_selector": ".category"
+  }
+}

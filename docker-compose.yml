@@ -1,0 +1,37 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rcq-backend
+    ports:
+      - "9000:8080"
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/config:/app/config
+    environment:
+      - DATABASE_URL=sqlite:///./data/rcq.db
+      - ARTICLES_PATH=/app/data/articles
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend-user:
+    build:
+      context: ./frontend-user
+      dockerfile: Dockerfile
+    container_name: rcq-frontend-user
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://backend:8080
+    restart: unless-stopped
+
+networks:
+  default:
+    name: rcq-network
