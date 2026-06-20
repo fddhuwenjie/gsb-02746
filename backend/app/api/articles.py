@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
@@ -39,28 +39,57 @@ class ArticleListResponse(BaseModel):
 async def get_articles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    year: Optional[int] = None,
-    month: Optional[int] = None,
+    year: Optional[str] = None,
+    month: Optional[str] = None,
     issue: Optional[str] = None,
     category: Optional[str] = None,
     search: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     query = db.query(Article)
-    
-    if year:
-        query = query.filter(Article.year == year)
-    if month:
-        query = query.filter(Article.month == month)
-    if issue:
-        query = query.filter(Article.issue == issue)
-    if category:
-        query = query.filter(Article.category == category)
-    if search:
-        query = query.filter(Article.title.contains(search))
+
+    def _clean(v):
+        if v is None:
+            return None
+        v = v.strip()
+        return v if v else None
+
+    year_v = _clean(year)
+    month_v = _clean(month)
+    issue_v = _clean(issue)
+    category_v = _clean(category)
+    search_v = _clean(search)
+
+    if year_v is not None:
+        try:
+            year_i = int(year_v)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="year must be an integer")
+        query = query.filter(Article.year == year_i)
+    if month_v is not None:
+        try:
+            month_i = int(month_v)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="month must be an integer")
+        query = query.filter(Article.month == month_i)
+    if issue_v:
+        query = query.filter(Article.issue == issue_v)
+    if category_v:
+        query = query.filter(Article.category == category_v)
+    if search_v:
+        query = query.filter(or_(
+            Article.title.contains(search_v),
+            Article.author.contains(search_v),
+        ))
     
     total = query.count()
-    items = query.order_by(desc(Article.created_at)).offset((page - 1) * page_size).limit(page_size).all()
+    items = (
+        query
+        .order_by(desc(Article.created_at), desc(Article.id))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
     
     return ArticleListResponse(items=items, total=total, page=page, page_size=page_size)
 

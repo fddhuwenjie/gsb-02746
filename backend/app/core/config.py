@@ -23,9 +23,10 @@ class Settings(BaseSettings):
     articles_path: str = "./data/articles"
     sources_config: str = "./config/sources.json"
     runtime_config: str = "./data/runtime_config.json"
-    
+
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
     
     def get_articles_path(self) -> str:
         """获取运行时文章保存路径"""
