@@ -22,6 +22,7 @@ class ArticleResponse(BaseModel):
     month: Optional[int]
     category: Optional[str]
     file_path: Optional[str]
+    url: Optional[str]
     created_at: datetime
 
     class Config:
@@ -110,9 +111,18 @@ async def seed_test_data(db: Session = Depends(get_db)):
         {"title": "简单生活", "author": "郑十", "content": "在这个物欲横流的时代，我们常常被各种欲望所困扰。我们想要更大的房子，更好的车子，更多的金钱。但当我们拥有了这些之后，真的就幸福了吗？\n\n其实，幸福很简单。一顿可口的饭菜，一次愉快的交谈，一个温暖的拥抱，都能让我们感到幸福。\n\n学会简单生活吧。放下那些不必要的欲望，你会发现，生活原来可以如此轻松和美好。", "source": "读者", "issue": "第1期", "year": 2024, "month": 4, "category": "生活"},
     ]
     
+    new_count = 0
     for article_data in test_articles:
-        article = Article(**article_data)
-        db.add(article)
+        db.flush()
+        existing = db.query(Article).filter(
+            Article.title == article_data["title"],
+            Article.year == article_data.get("year"),
+            Article.month == article_data.get("month")
+        ).first()
+        if not existing:
+            article = Article(**article_data)
+            db.add(article)
+            new_count += 1
     db.commit()
     
-    return {"message": f"已添加 {len(test_articles)} 篇测试文章"}
+    return {"message": f"已添加 {new_count} 篇测试文章"}

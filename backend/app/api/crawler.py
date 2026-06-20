@@ -102,13 +102,27 @@ async def crawl_task(request: CrawlRequest, db: Session):
         articles = await scraper.crawl(request.year, request.month, request.issue)
         
         from app.models.article import Article
+        new_count = 0
         for article_data in articles:
-            article = Article(**article_data)
-            db.add(article)
+            db.flush()
+            existing = None
+            if article_data.get("url"):
+                existing = db.query(Article).filter(Article.url == article_data["url"]).first()
+            if not existing and article_data.get("title"):
+                existing = db.query(Article).filter(
+                    Article.title == article_data["title"],
+                    Article.year == article_data.get("year"),
+                    Article.month == article_data.get("month")
+                ).first()
+            
+            if not existing:
+                article = Article(**article_data)
+                db.add(article)
+                new_count += 1
         db.commit()
         
-        crawl_status = {"status": "completed", "message": f"抓取完成", "articles_count": len(articles)}
-        logger.info(f"抓取完成: 共 {len(articles)} 篇文章")
+        crawl_status = {"status": "completed", "message": f"抓取完成，新增 {new_count} 篇", "articles_count": new_count}
+        logger.info(f"抓取完成: 新增 {new_count} 篇文章")
     except Exception as e:
         error_msg = str(e)
         crawl_status = {"status": "error", "message": error_msg, "articles_count": 0}
@@ -180,13 +194,22 @@ async def mock_crawl(db: Session = Depends(get_db)):
     crawl_status = {"status": "running", "message": "正在模拟抓取...", "articles_count": 0}
     
     try:
+        new_count = 0
         for article_data in mock_articles:
-            article = Article(**article_data)
-            db.add(article)
+            db.flush()
+            existing = db.query(Article).filter(
+                Article.title == article_data["title"],
+                Article.year == article_data.get("year"),
+                Article.month == article_data.get("month")
+            ).first()
+            if not existing:
+                article = Article(**article_data)
+                db.add(article)
+                new_count += 1
         db.commit()
         
-        crawl_status = {"status": "completed", "message": "模拟抓取完成", "articles_count": len(mock_articles)}
-        logger.info(f"模拟抓取完成: 共 {len(mock_articles)} 篇文章")
+        crawl_status = {"status": "completed", "message": f"模拟抓取完成，新增 {new_count} 篇", "articles_count": new_count}
+        logger.info(f"模拟抓取完成: 新增 {new_count} 篇文章")
         
         return {
             "success": True,
