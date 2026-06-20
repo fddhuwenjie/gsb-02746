@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 import asyncio
 import re
 import logging
+from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +92,7 @@ class ArticleScraper:
             for link in links:
                 href = link.get("href")
                 if href:
-                    if not href.startswith("http"):
-                        href = self.config["base_url"] + href
-                    urls.append(href)
+                    urls.append(urljoin(self.config["base_url"], href))
             
             return urls
         except Exception as e:
