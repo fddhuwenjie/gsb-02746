@@ -25,13 +25,15 @@ class ParseError(ScraperError):
 
 
 class ArticleScraper:
-    def __init__(self, source_config: Dict[str, Any], save_path: str):
+    def __init__(self, source_config: Dict[str, Any], save_path: str, max_retries: int = 1):
         self.config = source_config
         self.save_path = Path(save_path)
         self.save_path.mkdir(parents=True, exist_ok=True)
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
+        self.max_retries = max(0, int(max_retries))
+        self.request_delay = 0.5
         logger.info(f"初始化爬虫: source={source_config.get('name')}, save_path={save_path}")
     
     async def crawl(self, year: int, month: int, issue: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -46,14 +48,20 @@ class ArticleScraper:
             raise NetworkError(f"获取文章列表失败: {e}")
         
         articles = []
+        seen_urls = set()
         for i, url in enumerate(article_urls):
+            if url in seen_urls:
+                logger.debug(f"跳过重复链接: {url}")
+                continue
+            seen_urls.add(url)
             try:
                 logger.debug(f"抓取文章 [{i+1}/{len(article_urls)}]: {url}")
                 article = await self._fetch_article(url, year, month, issue)
                 if article:
                     articles.append(article)
                     logger.info(f"成功抓取: {article.get('title', '未知标题')}")
-                await asyncio.sleep(0.5)  # 礼貌性延迟
+                if self.request_delay > 0:
+                    await asyncio.sleep(self.request_delay)
             except Exception as e:
                 logger.warning(f"抓取文章失败 [{url}]: {e}")
                 continue
@@ -70,15 +78,33 @@ class ArticleScraper:
         )
         return url
     
+    async def _http_get(self, url: str):
+        """带 max_retries 次重试的 GET，仅对网络/超时类错误重试。"""
+        attempts = self.max_retries + 1
+        last_error: Optional[Exception] = None
+        for attempt in range(1, attempts + 1):
+            try:
+                async with httpx.AsyncClient(headers=self.headers, timeout=30, follow_redirects=True) as client:
+                    response = await client.get(url)
+                    response.raise_for_status()
+                    return response
+            except httpx.TimeoutException as e:
+                last_error = NetworkError(f"请求超时: {url}")
+                logger.warning(f"请求超时 [{attempt}/{attempts}]: {url}")
+            except httpx.HTTPStatusError as e:
+                # 4xx/5xx 不重试
+                raise NetworkError(f"HTTP错误 {e.response.status_code}: {url}")
+            except Exception as e:
+                last_error = NetworkError(f"网络请求失败: {e}")
+                logger.warning(f"网络请求失败 [{attempt}/{attempts}]: {url} - {e}")
+        assert last_error is not None
+        raise last_error
+
     async def _get_article_list(self, list_url: str) -> List[str]:
         try:
-            async with httpx.AsyncClient(headers=self.headers, timeout=30, follow_redirects=True) as client:
-                response = await client.get(list_url)
-                response.raise_for_status()
-        except httpx.TimeoutException:
-            raise NetworkError(f"请求超时: {list_url}")
-        except httpx.HTTPStatusError as e:
-            raise NetworkError(f"HTTP错误 {e.response.status_code}: {list_url}")
+            response = await self._http_get(list_url)
+        except NetworkError:
+            raise
         except Exception as e:
             raise NetworkError(f"网络请求失败: {e}")
         
@@ -101,13 +127,9 @@ class ArticleScraper:
     
     async def _fetch_article(self, url: str, year: int, month: int, issue: Optional[str]) -> Optional[Dict[str, Any]]:
         try:
-            async with httpx.AsyncClient(headers=self.headers, timeout=30, follow_redirects=True) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-        except httpx.TimeoutException:
-            raise NetworkError(f"请求超时: {url}")
-        except httpx.HTTPStatusError as e:
-            raise NetworkError(f"HTTP错误 {e.response.status_code}: {url}")
+            response = await self._http_get(url)
+        except NetworkError:
+            raise
         except Exception as e:
             raise NetworkError(f"网络请求失败: {e}")
         
@@ -119,6 +141,11 @@ class ArticleScraper:
             
             content_el = soup.select_one(self.config.get("content_selector", "article"))
             content = content_el.get_text(strip=True) if content_el else ""
+
+            # 结构变化容忍：标题和正文都为空，则认为这条文章解析失败，跳过
+            if title_el is None and not content:
+                logger.warning(f"页面结构无法解析（标题与正文均缺失），跳过: {url}")
+                return None
             
             author = None
             if self.config.get("author_selector"):
