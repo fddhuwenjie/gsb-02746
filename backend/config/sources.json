@@ -1,5 +1,16 @@
 {
-  "sources": [],
+  "sources": [
+    {
+      "name": "模拟数据源（测试用）",
+      "base_url": "https://mock.example.com",
+      "list_pattern": "/articles/{year}/{month}",
+      "article_selector": ".article-item a",
+      "title_selector": "h1.article-title",
+      "content_selector": ".article-content",
+      "author_selector": ".author-name",
+      "category_selector": ".category-tag"
+    }
+  ],
   "_notice": "【提供网站地址】经搜索未找到公开可爬取的读者杂志网站，请用户提供目标期刊网站地址",
   "_user_action_required": {
     "step1": "提供目标期刊网站的完整URL",

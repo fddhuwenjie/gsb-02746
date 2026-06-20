@@ -102,13 +102,33 @@ async def crawl_task(request: CrawlRequest, db: Session):
         articles = await scraper.crawl(request.year, request.month, request.issue)
         
         from app.models.article import Article
+        added = 0
+        skipped = 0
         for article_data in articles:
+            url = article_data.get("url")
+            source_name = article_data.get("source")
+            # 去重：同源同 URL 已存在则跳过
+            existing = None
+            if url:
+                existing = (
+                    db.query(Article)
+                    .filter(Article.source == source_name, Article.url == url)
+                    .first()
+                )
+            if existing:
+                skipped += 1
+                logger.info(f"跳过重复文章: {article_data.get('title')} ({url})")
+                continue
             article = Article(**article_data)
             db.add(article)
+            added += 1
         db.commit()
         
-        crawl_status = {"status": "completed", "message": f"抓取完成", "articles_count": len(articles)}
-        logger.info(f"抓取完成: 共 {len(articles)} 篇文章")
+        msg = f"抓取完成"
+        if skipped:
+            msg = f"抓取完成（新增 {added} 篇，跳过重复 {skipped} 篇）"
+        crawl_status = {"status": "completed", "message": msg, "articles_count": added}
+        logger.info(f"抓取完成: 新增 {added} 篇，跳过 {skipped} 篇")
     except Exception as e:
         error_msg = str(e)
         crawl_status = {"status": "error", "message": error_msg, "articles_count": 0}
