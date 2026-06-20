@@ -1,16 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, field_validator
-from typing import Optional
+from typing import Optional, Callable, List, Dict, Any
 import json
 import re
 import logging
 from pathlib import Path
 from datetime import datetime
 
+from app.core import database as db_core
 from app.core.database import get_db
 from app.core.config import settings
-from app.services.scraper import ArticleScraper
+from app.services.scraper import ArticleScraper, ScraperError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -49,12 +50,10 @@ class CrawlRequest(BaseModel):
     @classmethod
     def validate_save_path(cls, v):
         if v:
-            # 检查路径安全性
             forbidden_patterns = ['..', '~', '$', '|', ';', '&', '>', '<']
             for pattern in forbidden_patterns:
                 if pattern in v:
                     raise ValueError(f'保存路径不能包含 {pattern}')
-            # 必须是绝对路径或相对于 data 目录
             if not v.startswith('/app/data') and not v.startswith('./data') and not v.startswith('data'):
                 if v.startswith('/'):
                     raise ValueError('保存路径必须在 /app/data 目录下')
@@ -78,11 +77,38 @@ def load_sources():
     return {"sources": []}
 
 
-async def crawl_task(request: CrawlRequest, db: Session):
+def _save_articles_dedup(db: Session, articles: List[Dict[str, Any]]) -> int:
+    from app.models.article import Article
+    added = 0
+    for data in articles:
+        url = data.get("url")
+        title = data.get("title")
+        existing = None
+        if url:
+            existing = db.query(Article).filter(Article.url == url).first()
+        if not existing and title and data.get("year") and data.get("month"):
+            existing = db.query(Article).filter(
+                Article.title == title,
+                Article.year == data["year"],
+                Article.month == data["month"]
+            ).first()
+        if existing:
+            logger.debug(f"跳过重复文章: {title}")
+            continue
+        article = Article(**data)
+        db.add(article)
+        db.flush()
+        added += 1
+    db.commit()
+    return added
+
+
+async def crawl_task(request: CrawlRequest, scraper_factory: Optional[Callable] = None):
     global crawl_status
     crawl_status = {"status": "running", "message": "正在抓取...", "articles_count": 0}
     logger.info(f"开始抓取任务: year={request.year}, month={request.month}, issue={request.issue}")
     
+    db = db_core.SessionLocal()
     try:
         sources = load_sources()
         if not sources.get("sources"):
@@ -95,24 +121,28 @@ async def crawl_task(request: CrawlRequest, db: Session):
         if request.source_name:
             source = next((s for s in sources["sources"] if s["name"] == request.source_name), source)
         
-        # 使用运行时配置的路径或请求中的路径
         save_path = request.save_path or settings.get_articles_path()
         
-        scraper = ArticleScraper(source, save_path)
+        if scraper_factory:
+            scraper = scraper_factory(source, save_path)
+        else:
+            scraper = ArticleScraper(source, save_path)
         articles = await scraper.crawl(request.year, request.month, request.issue)
         
-        from app.models.article import Article
-        for article_data in articles:
-            article = Article(**article_data)
-            db.add(article)
-        db.commit()
+        added = _save_articles_dedup(db, articles)
         
-        crawl_status = {"status": "completed", "message": f"抓取完成", "articles_count": len(articles)}
-        logger.info(f"抓取完成: 共 {len(articles)} 篇文章")
+        crawl_status = {"status": "completed", "message": f"抓取完成，新增 {added} 篇", "articles_count": added}
+        logger.info(f"抓取完成: 新增 {added} 篇文章")
+    except ScraperError as e:
+        error_msg = str(e)
+        crawl_status = {"status": "error", "message": error_msg, "articles_count": 0}
+        logger.error(f"抓取失败: {error_msg}", exc_info=True)
     except Exception as e:
         error_msg = str(e)
         crawl_status = {"status": "error", "message": error_msg, "articles_count": 0}
         logger.error(f"抓取失败: {error_msg}", exc_info=True)
+    finally:
+        db.close()
 
 
 @router.post("/start")
@@ -121,7 +151,7 @@ async def start_crawl(request: CrawlRequest, background_tasks: BackgroundTasks, 
         raise HTTPException(status_code=400, detail="已有任务在运行")
     
     logger.info(f"收到抓取请求: {request.model_dump()}")
-    background_tasks.add_task(crawl_task, request, db)
+    background_tasks.add_task(crawl_task, request)
     return {"message": "抓取任务已启动"}
 
 
@@ -137,7 +167,6 @@ async def get_sources():
 
 @router.post("/mock")
 async def mock_crawl(db: Session = Depends(get_db)):
-    """模拟抓取 - 用于测试验证抓取流程"""
     global crawl_status
     logger.info("执行模拟抓取")
     
@@ -180,18 +209,15 @@ async def mock_crawl(db: Session = Depends(get_db)):
     crawl_status = {"status": "running", "message": "正在模拟抓取...", "articles_count": 0}
     
     try:
-        for article_data in mock_articles:
-            article = Article(**article_data)
-            db.add(article)
-        db.commit()
+        added = _save_articles_dedup(db, mock_articles)
         
-        crawl_status = {"status": "completed", "message": "模拟抓取完成", "articles_count": len(mock_articles)}
-        logger.info(f"模拟抓取完成: 共 {len(mock_articles)} 篇文章")
+        crawl_status = {"status": "completed", "message": "模拟抓取完成", "articles_count": added}
+        logger.info(f"模拟抓取完成: 新增 {added} 篇文章")
         
         return {
             "success": True,
-            "message": f"模拟抓取成功，已添加 {len(mock_articles)} 篇测试文章",
-            "articles_count": len(mock_articles)
+            "message": f"模拟抓取成功，已添加 {added} 篇测试文章",
+            "articles_count": added
         }
     except Exception as e:
         error_msg = str(e)

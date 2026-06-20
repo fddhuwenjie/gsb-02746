@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
@@ -22,6 +22,7 @@ class ArticleResponse(BaseModel):
     month: Optional[int]
     category: Optional[str]
     file_path: Optional[str]
+    url: Optional[str]
     created_at: datetime
 
     class Config:
@@ -57,7 +58,10 @@ async def get_articles(
     if category:
         query = query.filter(Article.category == category)
     if search:
-        query = query.filter(Article.title.contains(search))
+        query = query.filter(or_(
+            Article.title.contains(search),
+            Article.author.contains(search)
+        ))
     
     total = query.count()
     items = query.order_by(desc(Article.created_at)).offset((page - 1) * page_size).limit(page_size).all()
