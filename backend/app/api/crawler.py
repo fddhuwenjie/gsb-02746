@@ -11,6 +11,7 @@ from datetime import datetime
 from app.core.database import get_db
 from app.core.config import settings
 from app.services.scraper import ArticleScraper
+from app.models.article import Article
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -70,6 +71,25 @@ class CrawlStatus(BaseModel):
 crawl_status = {"status": "idle", "message": "", "articles_count": 0}
 
 
+def _ensure_unique(db: Session, article_data: dict) -> bool:
+    """Return True if article is new and was added; False if it already exists."""
+    if article_data.get("url"):
+        exists = db.query(Article).filter(Article.url == article_data["url"]).first()
+        if exists:
+            return False
+    else:
+        exists = db.query(Article).filter(
+            Article.title == article_data.get("title"),
+            Article.year == article_data.get("year"),
+            Article.month == article_data.get("month"),
+            Article.author == article_data.get("author"),
+        ).first()
+        if exists:
+            return False
+    db.add(Article(**article_data))
+    return True
+
+
 def load_sources():
     config_path = Path(settings.sources_config)
     if config_path.exists():
@@ -101,14 +121,20 @@ async def crawl_task(request: CrawlRequest, db: Session):
         scraper = ArticleScraper(source, save_path)
         articles = await scraper.crawl(request.year, request.month, request.issue)
         
-        from app.models.article import Article
+        new_count = 0
+        dup_count = 0
         for article_data in articles:
-            article = Article(**article_data)
-            db.add(article)
+            if _ensure_unique(db, article_data):
+                new_count += 1
+            else:
+                dup_count += 1
         db.commit()
         
-        crawl_status = {"status": "completed", "message": f"抓取完成", "articles_count": len(articles)}
-        logger.info(f"抓取完成: 共 {len(articles)} 篇文章")
+        msg = f"抓取完成，新增 {new_count} 篇"
+        if dup_count:
+            msg += f"（跳过重复 {dup_count} 篇）"
+        crawl_status = {"status": "completed", "message": msg, "articles_count": new_count}
+        logger.info(f"抓取完成: 新增 {new_count} 篇, 重复 {dup_count} 篇")
     except Exception as e:
         error_msg = str(e)
         crawl_status = {"status": "error", "message": error_msg, "articles_count": 0}
@@ -140,9 +166,6 @@ async def mock_crawl(db: Session = Depends(get_db)):
     """模拟抓取 - 用于测试验证抓取流程"""
     global crawl_status
     logger.info("执行模拟抓取")
-    
-    from app.models.article import Article
-    from datetime import datetime
     
     mock_articles = [
         {
@@ -180,18 +203,25 @@ async def mock_crawl(db: Session = Depends(get_db)):
     crawl_status = {"status": "running", "message": "正在模拟抓取...", "articles_count": 0}
     
     try:
+        new_count = 0
+        dup_count = 0
         for article_data in mock_articles:
-            article = Article(**article_data)
-            db.add(article)
+            if _ensure_unique(db, article_data):
+                new_count += 1
+            else:
+                dup_count += 1
         db.commit()
         
-        crawl_status = {"status": "completed", "message": "模拟抓取完成", "articles_count": len(mock_articles)}
-        logger.info(f"模拟抓取完成: 共 {len(mock_articles)} 篇文章")
+        msg = f"模拟抓取完成，新增 {new_count} 篇"
+        if dup_count:
+            msg += f"（跳过重复 {dup_count} 篇）"
+        crawl_status = {"status": "completed", "message": msg, "articles_count": new_count}
+        logger.info(f"模拟抓取完成: 新增 {new_count} 篇, 重复 {dup_count} 篇")
         
         return {
             "success": True,
-            "message": f"模拟抓取成功，已添加 {len(mock_articles)} 篇测试文章",
-            "articles_count": len(mock_articles)
+            "message": f"模拟抓取成功，已添加 {new_count} 篇测试文章",
+            "articles_count": new_count
         }
     except Exception as e:
         error_msg = str(e)
